@@ -14,12 +14,10 @@ def calculate_td(df):
     c_buy, c_sell = 0, 0
     for i in range(4, len(close)):
         if close[i] < close[i-4]:
-            c_buy += 1
-            buy_setup[i] = c_buy
+            c_buy += 1; buy_setup[i] = c_buy
         else: c_buy = 0
         if close[i] > close[i-4]:
-            c_sell += 1
-            sell_setup[i] = c_sell
+            c_sell += 1; sell_setup[i] = c_sell
         else: c_sell = 0
     return buy_setup, sell_setup
 
@@ -51,7 +49,7 @@ try:
     if not df_raw.empty:
         df = df_raw.copy()
         
-        # 計算指標 (均線、布林、RSI、MACD)
+        # 指標計算
         for ma in ma_list:
             df[f'MA{ma}'] = df['Close'].rolling(window=ma).mean()
         
@@ -71,7 +69,7 @@ try:
         df['Signal'] = df['MACD_val'].ewm(span=9, adjust=False).mean()
         df['Hist'] = df['MACD_val'] - df['Signal']
 
-        # --- 子圖配置 ---
+        # 子圖高度配置
         rows = 2
         if show_macd: rows += 1
         if show_rsi: rows += 1
@@ -79,59 +77,69 @@ try:
         if show_macd: rh.append(0.15)
         if show_rsi: rh.append(0.15)
         
-        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=rh)
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=rh)
 
-        # 1. K線
+        # 1. 主圖：收盤連線 (放在 K 線下方)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="收盤連線", line=dict(color='rgba(128,128,128,0.5)', width=1)), row=1, col=1)
+
+        # 2. 主圖：K線
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-            name="價格", increasing_line_color='#FF3333', decreasing_line_color='#00AA00',
-            hoverinfo='all'
+            name="價格", increasing_line_color='#FF3333', decreasing_line_color='#00AA00'
         ), row=1, col=1)
 
+        # 均線
         for ma in ma_list:
-            fig.add_trace(go.Scatter(x=df.index, y=df[f'MA{ma}'], name=f"MA{ma}", line=dict(width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df[f'MA{ma}'], name=f"MA{ma}", line=dict(width=1.2)), row=1, col=1)
 
+        # 布林通道 (修正：現在數值會顯示在資訊中)
         if show_bb:
-            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='rgba(173,216,230,0.2)'), showlegend=False, hoverinfo='skip'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], fill='tonexty', fillcolor='rgba(173,216,230,0.1)', line=dict(color='rgba(173,216,230,0.2)'), name="布林通道"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='rgba(173,216,230,0.5)', width=1), name="布林上軌"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='rgba(173,216,230,0.5)', width=1), fill='tonexty', fillcolor='rgba(173,216,230,0.1)', name="布林下軌"), row=1, col=1)
 
+        # 九轉標註
         if show_td:
             b, s = calculate_td(df)
             for i in range(len(df)):
-                if 0 < b[i] <= 9: fig.add_annotation(x=df.index[i], y=df['Low'].iloc[i], text=str(b[i]), showarrow=False, yshift=-12, font=dict(color="#00AA00", size=9), row=1, col=1)
-                if 0 < s[i] <= 9: fig.add_annotation(x=df.index[i], y=df['High'].iloc[i], text=str(s[i]), showarrow=False, yshift=12, font=dict(color="#FF3333", size=9), row=1, col=1)
+                if 0 < b[i] <= 9: fig.add_annotation(x=df.index[i], y=df['Low'].iloc[i], text=str(b[i]), showarrow=False, yshift=-15, font=dict(color="#00AA00", size=10), row=1, col=1)
+                if 0 < s[i] <= 9: fig.add_annotation(x=df.index[i], y=df['High'].iloc[i], text=str(s[i]), showarrow=False, yshift=15, font=dict(color="#FF3333", size=10), row=1, col=1)
 
-        # 2. 成交量
+        # 3. 成交量
         v_colors = ['#FF3333' if c >= o else '#00AA00' for c, o in zip(df['Close'], df['Open'])]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=v_colors, name="成交量"), row=2, col=1)
 
         curr = 3
-        # 3. MACD
+        # 4. MACD
         if show_macd:
             fig.add_trace(go.Scatter(x=df.index, y=df['MACD_val'], name="MACD", line=dict(color='blue')), row=curr, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], name="Signal", line=dict(color='orange')), row=curr, col=1)
             fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name="MACD柱", marker_color='gray'), row=curr, col=1)
             curr += 1
 
-        # 4. RSI
+        # 5. RSI
         if show_rsi:
             fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple')), row=curr, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=curr, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=curr, col=1)
 
-        # --- 佈局優化 (解決數值消失問題) ---
+        # --- 佈局優化 (實現貫穿線與同步顯示) ---
         fig.update_layout(
             height=900,
             xaxis_rangeslider_visible=False,
-            hovermode="x", # 改為 x 軸追蹤模式
-            spikedistance=-1, # 強制垂直對齊線
-            hoverlabel=dict(font_size=12),
+            hovermode="x unified", # 統一所有子圖的數據到一個框中
             margin=dict(l=10, r=10, t=50, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
-        # 讓每一層的垂直連線同步
-        fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikedash="dot", spikethickness=1)
+        # 設定 X 軸貫穿線 (Spikelines)
+        fig.update_xaxes(
+            showspikes=True,
+            spikemode="across", # 讓線條貫穿所有子圖
+            spikesnap="cursor",
+            spikethickness=1,
+            spikedash="solid",
+            spikecolor="gray"
+        )
         
         st.title(f"{symbol} - {info.get('longName', '股票分析')}")
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
