@@ -1,88 +1,148 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# 1. 頁面基礎設定
-st.set_page_config(page_title="極速看盤", layout="wide")
+st.set_page_config(page_title="台美股 Pro 移動分析", layout="wide")
 
-# 2. 側邊欄：精簡選項以減少引發重新計算的次數
-st.sidebar.header("🚀 秒開配置")
-market = st.sidebar.radio("市場", ["台股", "美股"], horizontal=True)
-symbol = st.sidebar.text_input("代號", value="2330" if market == "台股" else "TSLA").upper()
+# --- 核心邏輯：神奇九轉 ---
+def calculate_td(df):
+    close = df['Close'].values.flatten()
+    buy_setup, sell_setup = [0]*len(close), [0]*len(close)
+    c_buy, c_sell = 0, 0
+    for i in range(4, len(close)):
+        if close[i] < close[i-4]:
+            c_buy += 1; buy_setup[i] = c_buy
+        else: c_buy = 0
+        if close[i] > close[i-4]:
+            c_sell += 1; sell_setup[i] = c_sell
+        else: c_sell = 0
+    return buy_setup, sell_setup
 
-# 限制選擇，減少 iPad 的計算負擔
-range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
-selected_range = st.sidebar.selectbox("回推範圍", list(range_map.keys()), index=0)
+# --- 側邊欄控制 ---
+st.sidebar.header("📊 參數設定")
+market = st.sidebar.radio("市場", ["台股 (TW)", "美股 (US)"])
+symbol = st.sidebar.text_input("代號", value="2330" if market == "台股 (TW)" else "NVDA").upper()
+period = st.sidebar.selectbox("時段", ["1mo", "3mo", "1y", "5y"], index=2)
 
-# 3. 極速下載與處理
-@st.cache_data(ttl=600)
-def get_data_fast(symbol, market, period):
-    s = f"{symbol}.TW" if market == "台股" else symbol
-    # 增加 threads=False 避免某些環境下的衝突，progress=False 減少 log 輸出
-    df = yf.download(s, period=period, interval="1d", progress=False, threads=False)
-    
-    if df.empty and market == "台股":
-        df = yf.download(f"{symbol}.TWO", period=period, interval="1d", progress=False)
+st.sidebar.subheader("技術指標")
+show_td = st.sidebar.checkbox("顯示神奇九轉 (TD)", value=True)
+show_bb = st.sidebar.checkbox("布林通道 (BB)", value=True)
+show_macd = st.sidebar.checkbox("顯示 MACD", value=True)
+show_rsi = st.sidebar.checkbox("顯示 RSI (14)", value=True)
+ma_list = st.sidebar.multiselect("均線", [5, 10, 20, 60], default=[5, 20])
+
+@st.cache_data(ttl=3600)
+def fetch_data(symbol, market, period):
+    ticker_str = f"{symbol}.TW" if market == "台股 (TW)" else symbol
+    t = yf.Ticker(ticker_str)
+    df = t.history(period=period)
+    if df.empty and market == "台股 (TW)":
+        t = yf.Ticker(f"{symbol}.TWO")
+        df = t.history(period=period)
+    return df, t.info
+
+try:
+    df_raw, info = fetch_data(symbol, market, period)
+    if not df_raw.empty:
+        df = df_raw.copy()
         
-    if not df.empty:
-        # 修正新版 yfinance 的欄位名稱問題
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-    return df
-
-# 4. 繪圖邏輯優化
-def draw_chart(df, symbol):
-    # 只計算最核心指標
-    df['MA20'] = df['Close'].rolling(20).mean()
-    std = df['Close'].rolling(20).std()
-    df['UB'] = df['MA20'] + (std * 2)
-    df['LB'] = df['MA20'] - (std * 2)
-    
-    # 使用 Light 模板減少渲染負擔
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
-
-    # K線
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name="K線", increasing_line_color='#FF3333', decreasing_line_color='#00AA00'
-    ), row=1, col=1)
-
-    # 布林通道 (僅畫線，不填充色以加快渲染)
-    fig.add_trace(go.Scatter(x=df.index, y=df['UB'], line=dict(color='rgba(173,216,230,0.5)', width=1), name="布林上軌"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['LB'], line=dict(color='rgba(173,216,230,0.5)', width=1), name="布林下軌"), row=1, col=1)
-
-    # 成交量
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="成交量", marker_color='gray'), row=2, col=1)
-
-    fig.update_layout(
-        height=550, # iPad 最佳高度，不需滾動
-        xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-        margin=dict(l=5, r=5, t=30, b=5),
-        template="plotly_white",
-        showlegend=False
-    )
-    
-    # 移除斷點 (非交易日)
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    return fig
-
-# --- 主程式執行 ---
-if symbol:
-    with st.spinner('連線中...'):
-        data = get_data_fast(symbol, market, range_map[selected_range])
+        # 指標計算
+        for ma in ma_list:
+            df[f'MA{ma}'] = df['Close'].rolling(window=ma).mean()
         
-    if not data.empty:
-        # 效能關鍵：如果資料量太大（如5年日線），在 iPad 上只繪製最後 300 根
-        display_df = data.tail(300) if len(data) > 300 else data
+        df['BB_Mid'] = df['Close'].rolling(window=20).mean()
+        std = df['Close'].rolling(window=20).std()
+        df['BB_Upper'] = df['BB_Mid'] + (std * 2)
+        df['BB_Lower'] = df['BB_Mid'] - (std * 2)
         
-        fig = draw_chart(display_df, symbol)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD_val'] = exp1 - exp2
+        df['Signal'] = df['MACD_val'].ewm(span=9, adjust=False).mean()
+        df['Hist'] = df['MACD_val'] - df['Signal']
+
+        # 子圖高度配置
+        rows = 2
+        if show_macd: rows += 1
+        if show_rsi: rows += 1
+        rh = [0.5, 0.15]
+        if show_macd: rh.append(0.15)
+        if show_rsi: rh.append(0.15)
+        
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=rh)
+
+        # 1. 主圖：收盤連線 (放在 K 線下方)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="收盤連線", line=dict(color='rgba(128,128,128,0.5)', width=1)), row=1, col=1)
+
+        # 2. 主圖：K線
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+            name="價格", increasing_line_color='#FF3333', decreasing_line_color='#00AA00'
+        ), row=1, col=1)
+
+        # 均線
+        for ma in ma_list:
+            fig.add_trace(go.Scatter(x=df.index, y=df[f'MA{ma}'], name=f"MA{ma}", line=dict(width=1.2)), row=1, col=1)
+
+        # 布林通道 (修正：現在數值會顯示在資訊中)
+        if show_bb:
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='rgba(173,216,230,0.5)', width=1), name="布林上軌"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='rgba(173,216,230,0.5)', width=1), fill='tonexty', fillcolor='rgba(173,216,230,0.1)', name="布林下軌"), row=1, col=1)
+
+        # 九轉標註
+        if show_td:
+            b, s = calculate_td(df)
+            for i in range(len(df)):
+                if 0 < b[i] <= 9: fig.add_annotation(x=df.index[i], y=df['Low'].iloc[i], text=str(b[i]), showarrow=False, yshift=-15, font=dict(color="#00AA00", size=10), row=1, col=1)
+                if 0 < s[i] <= 9: fig.add_annotation(x=df.index[i], y=df['High'].iloc[i], text=str(s[i]), showarrow=False, yshift=15, font=dict(color="#FF3333", size=10), row=1, col=1)
+
+        # 3. 成交量
+        v_colors = ['#FF3333' if c >= o else '#00AA00' for c, o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=v_colors, name="成交量"), row=2, col=1)
+
+        curr = 3
+        # 4. MACD
+        if show_macd:
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_val'], name="MACD", line=dict(color='blue')), row=curr, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], name="Signal", line=dict(color='orange')), row=curr, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name="MACD柱", marker_color='gray'), row=curr, col=1)
+            curr += 1
+
+        # 5. RSI
+        if show_rsi:
+            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple')), row=curr, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=curr, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=curr, col=1)
+
+        # --- 佈局優化 (實現貫穿線與同步顯示) ---
+        fig.update_layout(
+            height=900,
+            xaxis_rangeslider_visible=False,
+            hovermode="x unified", # 統一所有子圖的數據到一個框中
+            margin=dict(l=10, r=10, t=50, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        # 設定 X 軸貫穿線 (Spikelines)
+        fig.update_xaxes(
+            showspikes=True,
+            spikemode="across", # 讓線條貫穿所有子圖
+            spikesnap="cursor",
+            spikethickness=1,
+            spikedash="solid",
+            spikecolor="gray"
+        )
+        
+        st.title(f"{symbol} - {info.get('longName', '股票分析')}")
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-        
-        # 數據顯示改用更輕量的 table
-        st.caption(f"最後更新時間: {data.index[-1].strftime('%Y-%m-%d')}")
-    else:
-        st.warning("查無資料，請輸入正確代號 (例如: 2330 或 AAPL)")
+
+    else: st.error("查無資料")
+except Exception as e: st.error(f"分析失敗: {e}")
