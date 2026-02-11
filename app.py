@@ -8,38 +8,34 @@ from plotly.subplots import make_subplots
 # 1. 頁面基礎設定
 st.set_page_config(page_title="台美股 Pro 專業版", layout="wide")
 
-# 2. 側邊欄控制與快速選股
+# --- 關鍵：初始化與按鈕邏輯 ---
+if 'symbol_key' not in st.session_state:
+    st.session_state.symbol_key = "2330"
+if 'market_key' not in st.session_state:
+    st.session_state.market_key = "台股"
+
+def quick_select(s, m):
+    # 強制覆蓋 Widget 的 State
+    st.session_state.symbol_key = s
+    st.session_state.market_key = m
+
+# 2. 側邊欄控制
 st.sidebar.header("📊 專業指標配置")
-
-# 初始化 session_state
-if 'symbol' not in st.session_state:
-    st.session_state.symbol = "2330"
-if 'market' not in st.session_state:
-    st.session_state.market = "台股"
-
-def update_symbol(s, m):
-    st.session_state.symbol = s
-    st.session_state.market = m
 
 st.sidebar.subheader("🚀 快速選股")
 col1, col2 = st.sidebar.columns(2)
 with col1:
-    if st.button("2330 台積電"): update_symbol("2330", "台股")
-    if st.button("TSM (美)"): update_symbol("TSM", "美股")
+    if st.button("2330 台積電", on_click=quick_select, args=("2330", "台股")): pass
+    if st.button("TSM (美)", on_click=quick_select, args=("TSM", "美股")): pass
 with col2:
-    if st.button("TSLA 特斯拉"): update_symbol("TSLA", "美股")
-    if st.button("MSFT 微軟"): update_symbol("MSFT", "美股")
+    if st.button("TSLA 特斯拉", on_click=quick_select, args=("TSLA", "美股")): pass
+    if st.button("MSFT 微軟", on_click=quick_select, args=("MSFT", "美股")): pass
 
 st.sidebar.divider()
 
-market = st.sidebar.radio("市場手動切換", ["台股", "美股"], 
-                          index=0 if st.session_state.market == "台股" else 1, 
-                          horizontal=True, key="market_radio")
-symbol = st.sidebar.text_input("代號手動輸入", value=st.session_state.symbol).upper()
-
-# 同步狀態
-st.session_state.symbol = symbol
-st.session_state.market = market
+# 使用 key 直接連動 session_state
+market = st.sidebar.radio("市場切換", ["台股", "美股"], key="market_key", horizontal=True)
+symbol = st.sidebar.text_input("代號輸入", key="symbol_key").upper()
 
 range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
 selected_range = st.sidebar.selectbox("回推範圍", list(range_map.keys()), index=0)
@@ -55,10 +51,10 @@ with ma_cols[1]:
     show_ma60 = st.toggle("MA 60", value=False)
 
 st.sidebar.subheader("技術指標")
-show_td = st.sidebar.toggle("神奇九轉 (1-9)", value=True)
-show_bb = st.sidebar.toggle("布林通道 (BB)", value=True)
-show_macd = st.sidebar.toggle("MACD (紅漲綠跌)", value=True)
-show_rsi = st.sidebar.toggle("RSI", value=True)
+show_td = st.toggle("神奇九轉 (1-9)", value=True)
+show_bb = st.toggle("布林通道 (BB)", value=True)
+show_macd = st.toggle("MACD (紅漲綠跌)", value=True)
+show_rsi = st.toggle("RSI", value=True)
 
 # 3. 資料抓取與名稱解析
 @st.cache_data(ttl=600)
@@ -67,7 +63,6 @@ def get_processed_data(symbol, market, period):
     ticker = yf.Ticker(s)
     df = ticker.history(period=period, interval="1d")
     
-    # 台股 OTC 判斷
     if df.empty and market == "台股":
         s = f"{symbol}.TWO"
         ticker = yf.Ticker(s)
@@ -75,26 +70,19 @@ def get_processed_data(symbol, market, period):
         
     if df.empty: return None, "未知股票"
 
-    # 抓取中文或英文名稱
     stock_name = ticker.info.get('longName') or ticker.info.get('shortName') or symbol
-    
-    # 修正 yfinance 欄位 (新版相容)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # 技術指標計算
     for ma in [5, 10, 20, 60]:
         df[f'MA{ma}'] = df['Close'].rolling(ma).mean()
-    
     std = df['Close'].rolling(20).std()
     df['UB'] = df['MA20'] + (std * 2)
     df['LB'] = df['MA20'] - (std * 2)
-    
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-
     exp1 = df['Close'].ewm(span=12, adjust=False).mean()
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
@@ -115,13 +103,12 @@ def calc_td_full(df):
     return buy_s, sell_s
 
 # 4. 主程式執行
-if st.session_state.symbol:
-    data, full_name = get_processed_data(st.session_state.symbol, st.session_state.market, range_map[selected_range])
+if symbol:
+    # 這裡直接使用 Widget 產出的變數
+    data, full_name = get_processed_data(symbol, market, range_map[selected_range])
     
     if data is not None:
-        # --- 顯示股票名稱標題 ---
-        st.subheader(f"📈 {st.session_state.symbol} - {full_name}")
-        
+        st.subheader(f"📈 {symbol} - {full_name}")
         df = data.tail(400)
         
         # 假日過濾
@@ -129,7 +116,6 @@ if st.session_state.symbol:
         dt_obs = [d.strftime("%Y-%m-%d") for d in df.index]
         dt_breaks = [d for d in dt_all.strftime("%Y-%m-%d").tolist() if d not in dt_obs]
 
-        # 繪圖子圖配置
         rows = 2 
         if show_macd: rows += 1
         if show_rsi: rows += 1
@@ -180,6 +166,5 @@ if st.session_state.symbol:
         fig.update_xaxes(rangebreaks=[dict(values=dt_breaks)], showspikes=True, spikemode="across")
         
         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'doubleClick': 'reset+autosize'})
-        
     else:
         st.error("查無資料，請確認代號是否正確")
