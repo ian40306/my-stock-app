@@ -8,55 +8,56 @@ from plotly.subplots import make_subplots
 # 1. 頁面基礎設定
 st.set_page_config(page_title="台美股 Pro 專業版", layout="wide")
 
-# --- 關鍵：初始化與按鈕邏輯 ---
+# --- 初始化狀態與回調函數 ---
 if 'symbol_key' not in st.session_state:
     st.session_state.symbol_key = "2330"
 if 'market_key' not in st.session_state:
     st.session_state.market_key = "台股"
 
 def quick_select(s, m):
-    # 強制覆蓋 Widget 的 State
     st.session_state.symbol_key = s
     st.session_state.market_key = m
 
-# 2. 側邊欄控制
-st.sidebar.header("📊 專業指標配置")
+# 2. 【側邊欄控制區】所有的開關都在這裡
+with st.sidebar:
+    st.header("📊 專業指標配置")
 
-st.sidebar.subheader("🚀 快速選股")
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    if st.button("2330 台積電", on_click=quick_select, args=("2330", "台股")): pass
-    if st.button("TSM (美)", on_click=quick_select, args=("TSM", "美股")): pass
-with col2:
-    if st.button("TSLA 特斯拉", on_click=quick_select, args=("TSLA", "美股")): pass
-    if st.button("MSFT 微軟", on_click=quick_select, args=("MSFT", "美股")): pass
+    st.subheader("🚀 快速選股")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button("2330 台積電", on_click=quick_select, args=("2330", "台股"), use_container_width=True)
+        st.button("TSM (美股)", on_click=quick_select, args=("TSM", "美股"), use_container_width=True)
+    with col2:
+        st.button("TSLA 特斯拉", on_click=quick_select, args=("TSLA", "美股"), use_container_width=True)
+        st.button("MSFT 微軟", on_click=quick_select, args=("MSFT", "美股"), use_container_width=True)
 
-st.sidebar.divider()
+    st.divider()
 
-# 使用 key 直接連動 session_state
-market = st.sidebar.radio("市場切換", ["台股", "美股"], key="market_key", horizontal=True)
-symbol = st.sidebar.text_input("代號輸入", key="symbol_key").upper()
+    # 市場與代號輸入
+    market = st.radio("市場切換", ["台股", "美股"], key="market_key", horizontal=True)
+    symbol = st.text_input("代號輸入", key="symbol_key").upper()
 
-range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
-selected_range = st.sidebar.selectbox("回推範圍", list(range_map.keys()), index=0)
+    range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
+    selected_range = st.selectbox("回推範圍", list(range_map.keys()), index=0)
 
-# 指標開關
-st.sidebar.subheader("均線設定 (MA)")
-ma_cols = st.sidebar.columns(2)
-with ma_cols[0]:
-    show_ma5 = st.toggle("MA 5", value=True)
-    show_ma20 = st.toggle("MA 20", value=True)
-with ma_cols[1]:
-    show_ma10 = st.toggle("MA 10", value=False)
-    show_ma60 = st.toggle("MA 60", value=False)
+    # 均線設定 (放回左側)
+    st.subheader("均線設定 (MA)")
+    ma_cols = st.columns(2)
+    with ma_cols[0]:
+        show_ma5 = st.toggle("MA 5", value=True)
+        show_ma20 = st.toggle("MA 20", value=True)
+    with ma_cols[1]:
+        show_ma10 = st.toggle("MA 10", value=False)
+        show_ma60 = st.toggle("MA 60", value=False)
 
-st.sidebar.subheader("技術指標")
-show_td = st.toggle("神奇九轉 (1-9)", value=True)
-show_bb = st.toggle("布林通道 (BB)", value=True)
-show_macd = st.toggle("MACD (紅漲綠跌)", value=True)
-show_rsi = st.toggle("RSI", value=True)
+    # 技術指標設定 (放回左側)
+    st.subheader("技術指標")
+    show_td = st.toggle("神奇九轉 (1-9)", value=True)
+    show_bb = st.toggle("布林通道 (BB)", value=True)
+    show_macd = st.toggle("MACD (紅漲綠跌)", value=True)
+    show_rsi = st.toggle("RSI", value=True)
 
-# 3. 資料抓取與名稱解析
+# 3. 資料抓取函數 (保持不變)
 @st.cache_data(ttl=600)
 def get_processed_data(symbol, market, period):
     s = f"{symbol}.TW" if market == "台股" else symbol
@@ -102,9 +103,8 @@ def calc_td_full(df):
         else: cs = 0
     return buy_s, sell_s
 
-# 4. 主程式執行
+# 4. 【主圖表區域】
 if symbol:
-    # 這裡直接使用 Widget 產出的變數
     data, full_name = get_processed_data(symbol, market, range_map[selected_range])
     
     if data is not None:
