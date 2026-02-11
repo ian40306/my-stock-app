@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # 1. 頁面基礎設定
-st.set_page_config(page_title="台美股 Pro 極速版", layout="wide")
+st.set_page_config(page_title="台美股 Pro 極速視覺版", layout="wide")
 
 # 2. 側邊欄：配置
 st.sidebar.header("📊 專業指標配置")
@@ -15,7 +15,7 @@ symbol = st.sidebar.text_input("代號", value="2330" if market == "台股" else
 range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
 selected_range = st.sidebar.selectbox("回推範圍", list(range_map.keys()), index=0)
 
-# 指標開關 (全部改為 Toggle 按鈕)
+# 指標開關
 st.sidebar.subheader("均線設定 (MA)")
 show_ma5 = st.sidebar.toggle("MA 5", value=True)
 show_ma10 = st.sidebar.toggle("MA 10", value=False)
@@ -23,12 +23,12 @@ show_ma20 = st.sidebar.toggle("MA 20", value=True)
 show_ma60 = st.sidebar.toggle("MA 60", value=False)
 
 st.sidebar.subheader("技術指標")
-show_td = st.sidebar.toggle("神奇九轉 (TD)", value=True)
+show_td = st.sidebar.toggle("神奇九轉 (1-9)", value=True)
 show_bb = st.sidebar.toggle("布林通道 (BB)", value=True)
-show_macd = st.sidebar.toggle("MACD", value=True)
+show_macd = st.sidebar.toggle("MACD (紅綠柱)", value=True)
 show_rsi = st.sidebar.toggle("RSI", value=True)
 
-# 3. 極速下載與快取處理
+# 3. 資料抓取與指標計算
 @st.cache_data(ttl=600)
 def get_processed_data(symbol, market, period):
     s = f"{symbol}.TW" if market == "台股" else symbol
@@ -66,8 +66,8 @@ def get_processed_data(symbol, market, period):
     
     return df
 
-# 九轉計算邏輯 (高效版)
-def calc_td_9(df):
+# 九轉完整計算 (1-9)
+def calc_td_full(df):
     close = df['Close'].values
     buy_s, sell_s = [0]*len(df), [0]*len(df)
     cb, cs = 0, 0
@@ -78,73 +78,74 @@ def calc_td_9(df):
         else: cs = 0
     return buy_s, sell_s
 
-# 4. 主程式執行
+# 4. 繪圖主程式
 if symbol:
     data = get_processed_data(symbol, market, range_map[selected_range])
     
     if data is not None:
-        df = data.tail(500) # 限制繪圖點數確保 iPad 流暢
+        df = data.tail(400) # 維持流暢度
         
         rows = 2 
         if show_macd: rows += 1
         if show_rsi: rows += 1
-        rh = [0.4, 0.15]
-        if show_macd: rh.append(0.15)
-        if show_rsi: rh.append(0.15)
+        rh = [0.45, 0.12] + ([0.15] if show_macd else []) + ([0.15] if show_rsi else [])
         
         fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=rh)
 
         # --- A. 主圖層 ---
-        # 1. 每天收盤價連線 (置底)
+        # 收盤連線 (淺灰色實線)
         fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="收盤連線", 
-                                line=dict(color='rgba(100,100,100,0.3)', width=1.5), 
+                                line=dict(color='rgba(150,150,150,0.4)', width=1.2), 
                                 hoverinfo='skip'), row=1, col=1)
         
-        # 2. K線圖
+        # K線
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="價格"), row=1, col=1)
         
-        # 3. 均線開關控制
-        ma_configs = {
-            'MA5': (show_ma5, 'blue'),
-            'MA10': (show_ma10, 'cyan'),
-            'MA20': (show_ma20, 'orange'),
-            'MA60': (show_ma60, 'green')
-        }
+        # 均線
+        ma_configs = {'MA5': (show_ma5, 'blue'), 'MA10': (show_ma10, 'cyan'), 'MA20': (show_ma20, 'orange'), 'MA60': (show_ma60, 'green')}
         for ma_label, (show, color) in ma_configs.items():
             if show:
                 fig.add_trace(go.Scatter(x=df.index, y=df[ma_label], name=ma_label, line=dict(width=1.2, color=color)), row=1, col=1)
         
-        # 4. 布林通道
+        # 布林通道 (虛線)
         if show_bb:
-            fig.add_trace(go.Scatter(x=df.index, y=df['UB'], name="布林上", line=dict(color='rgba(173,216,230,0.5)', width=1, dash='dash')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['LB'], name="布林下", line=dict(color='rgba(173,216,230,0.5)', width=1, dash='dash')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['UB'], name="布林上", line=dict(color='rgba(173,216,230,0.6)', width=1, dash='dot')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['LB'], name="布林下", line=dict(color='rgba(173,216,230,0.6)', width=1, dash='dot')), row=1, col=1)
 
-        # 5. 神奇九轉 (標註 9)
+        # 神奇九轉 (1-9 全顯示)
         if show_td:
-            b, s = calc_td_9(df)
+            b, s = calc_td_full(df)
             for i in range(len(df)):
-                if b[i] == 9: fig.add_annotation(x=df.index[i], y=df['Low'].iloc[i], text="9", showarrow=False, yshift=-12, font=dict(color="green", size=12,强调=True), row=1, col=1)
-                if s[i] == 9: fig.add_annotation(x=df.index[i], y=df['High'].iloc[i], text="9", showarrow=False, yshift=12, font=dict(color="red", size=12), row=1, col=1)
+                # 買入序列 (綠字)
+                if 0 < b[i] <= 9:
+                    fig.add_annotation(x=df.index[i], y=df['Low'].iloc[i], text=str(b[i]), showarrow=False, 
+                                       yshift=-12, font=dict(color="#00AA00", size=10, family="Arial Black"), row=1, col=1)
+                # 賣出序列 (紅字)
+                if 0 < s[i] <= 9:
+                    fig.add_annotation(x=df.index[i], y=df['High'].iloc[i], text=str(s[i]), showarrow=False, 
+                                       yshift=12, font=dict(color="#FF3333", size=10, family="Arial Black"), row=1, col=1)
 
         # --- B. 成交量 ---
-        v_colors = ['red' if c >= o else 'green' for c, o in zip(df['Close'], df['Open'])]
-        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="成交量", marker_color=v_colors), row=2, col=1)
+        v_colors = ['#FF3333' if c >= o else '#00AA00' for c, o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="成交量", marker_color=v_colors, opacity=0.8), row=2, col=1)
 
         curr = 3
-        # --- C. MACD ---
+        # --- C. MACD (紅綠柱優化) ---
         if show_macd:
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='blue', width=1)), row=curr, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Sig'], name="訊號線", line=dict(color='orange', width=1)), row=curr, col=1)
-            fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name="MACD柱", marker_color='gray'), row=curr, col=1)
+            # 柱狀圖顏色邏輯：Hist > 0 紅色, Hist < 0 綠色
+            hist_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df['Hist']]
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='blue', width=1.2)), row=curr, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Sig'], name="DIF", line=dict(color='orange', width=1.2)), row=curr, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name="MACD柱", marker_color=hist_colors), row=curr, col=1)
             curr += 1
 
         # --- D. RSI ---
         if show_rsi:
-            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1)), row=curr, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=curr, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=curr, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1.2)), row=curr, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="#FF3333", opacity=0.5, row=curr, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="#00AA00", opacity=0.5, row=curr, col=1)
 
-        # 佈局優化 (包含雙擊還原與滑桿)
+        # 佈局與縮放優化
         fig.update_layout(
             height=850,
             xaxis_rangeslider_visible=True,
@@ -155,13 +156,10 @@ if symbol:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
+        # 移除假日與貫穿線
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikemode="across", spikedash="solid", spikecolor="#D3D3D3", spikethickness=1)
         
-        st.plotly_chart(fig, use_container_width=True, config={
-            'scrollZoom': True,
-            'displayModeBar': True,
-            'doubleClick': 'reset+autosize' # 雙擊還原
-        })
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'doubleClick': 'reset+autosize'})
         
     else:
-        st.error("查無資料")
+        st.error("查無資料，請確認代號")
