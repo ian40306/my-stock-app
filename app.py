@@ -18,7 +18,7 @@ def quick_select(s, m):
     st.session_state.symbol_key = s
     st.session_state.market_key = m
 
-# 2. 【側邊欄控制區】所有的開關都在這裡
+# 2. 【側邊欄控制區】
 with st.sidebar:
     st.header("📊 專業指標配置")
 
@@ -33,14 +33,12 @@ with st.sidebar:
 
     st.divider()
 
-    # 市場與代號輸入
     market = st.radio("市場切換", ["台股", "美股"], key="market_key", horizontal=True)
     symbol = st.text_input("代號輸入", key="symbol_key").upper()
 
     range_map = {"三個月": "3mo", "六個月": "6mo", "一年": "1y", "五年": "5y"}
     selected_range = st.selectbox("回推範圍", list(range_map.keys()), index=0)
 
-    # 均線設定 (放回左側)
     st.subheader("均線設定 (MA)")
     ma_cols = st.columns(2)
     with ma_cols[0]:
@@ -50,14 +48,14 @@ with st.sidebar:
         show_ma10 = st.toggle("MA 10", value=False)
         show_ma60 = st.toggle("MA 60", value=False)
 
-    # 技術指標設定 (放回左側)
     st.subheader("技術指標")
     show_td = st.toggle("神奇九轉 (1-9)", value=True)
     show_bb = st.toggle("布林通道 (BB)", value=True)
     show_macd = st.toggle("MACD (紅漲綠跌)", value=True)
+    show_kd = st.toggle("KD (隨機指標)", value=True) # 新增 KD 開關
     show_rsi = st.toggle("RSI", value=True)
 
-# 3. 資料抓取函數 (保持不變)
+# 3. 資料抓取與指標計算
 @st.cache_data(ttl=600)
 def get_processed_data(symbol, market, period):
     s = f"{symbol}.TW" if market == "台股" else symbol
@@ -75,20 +73,34 @@ def get_processed_data(symbol, market, period):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
+    # MA 計算
     for ma in [5, 10, 20, 60]:
         df[f'MA{ma}'] = df['Close'].rolling(ma).mean()
+    
+    # 布林
     std = df['Close'].rolling(20).std()
     df['UB'] = df['MA20'] + (std * 2)
     df['LB'] = df['MA20'] - (std * 2)
+    
+    # RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+
+    # MACD
     exp1 = df['Close'].ewm(span=12, adjust=False).mean()
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['Sig'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Hist'] = df['MACD'] - df['Sig']
+
+    # KD 計算 (9, 3, 3)
+    low_9 = df['Low'].rolling(window=9).min()
+    high_9 = df['High'].rolling(window=9).max()
+    rsv = 100 * ((df['Close'] - low_9) / (high_9 - low_9))
+    df['K'] = rsv.ewm(com=2, adjust=False).mean() # 這裡使用 ewm (com=2 等同於 3日平滑)
+    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
     
     return df, stock_name
 
@@ -116,12 +128,19 @@ if symbol:
         dt_obs = [d.strftime("%Y-%m-%d") for d in df.index]
         dt_breaks = [d for d in dt_all.strftime("%Y-%m-%d").tolist() if d not in dt_obs]
 
-        rows = 2 
+        # 動態計算子圖數量
+        rows = 2 # 主圖 + 成交量
         if show_macd: rows += 1
+        if show_kd: rows += 1
         if show_rsi: rows += 1
-        rh = [0.45, 0.12] + ([0.15] if show_macd else []) + ([0.15] if show_rsi else [])
         
-        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=rh)
+        # 設定每個圖層的高度比例
+        row_h = [0.4, 0.12] # 主圖, 成交量
+        if show_macd: row_h.append(0.15)
+        if show_kd: row_h.append(0.15)
+        if show_rsi: row_h.append(0.15)
+        
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=row_h)
 
         # A. 主圖
         fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="收盤連線", line=dict(color='rgba(150,150,150,0.5)', width=1.5), hoverinfo='skip'), row=1, col=1)
@@ -148,6 +167,7 @@ if symbol:
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="成交量", marker_color=v_colors), row=2, col=1)
 
         curr = 3
+        # C. MACD
         if show_macd:
             hist_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df['Hist']]
             fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='blue', width=1.2)), row=curr, col=1)
@@ -155,12 +175,22 @@ if symbol:
             fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name="MACD柱", marker_color=hist_colors), row=curr, col=1)
             curr += 1
 
+        # D. KD (隨機指標)
+        if show_kd:
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name="K值", line=dict(color='blue', width=1.2)), row=curr, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name="D值", line=dict(color='orange', width=1.2)), row=curr, col=1)
+            fig.add_hline(y=80, line_dash="dash", line_color="#FF3333", opacity=0.5, row=curr, col=1)
+            fig.add_hline(y=20, line_dash="dash", line_color="#00AA00", opacity=0.5, row=curr, col=1)
+            curr += 1
+
+        # E. RSI
         if show_rsi:
             fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1.2)), row=curr, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="#FF3333", opacity=0.5, row=curr, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="#00AA00", opacity=0.5, row=curr, col=1)
 
-        fig.update_layout(height=850, xaxis_rangeslider_visible=True, xaxis_rangeslider_thickness=0.03,
+        fig.update_layout(height=1000, # 增加總高度以容納更多指標
+                          xaxis_rangeslider_visible=True, xaxis_rangeslider_thickness=0.03,
                           hovermode="x unified", template="plotly_white", margin=dict(l=10, r=10, t=30, b=10),
                           legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         fig.update_xaxes(rangebreaks=[dict(values=dt_breaks)], showspikes=True, spikemode="across")
